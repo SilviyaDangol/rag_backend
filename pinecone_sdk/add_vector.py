@@ -8,14 +8,15 @@ def upstream_pine_code(vector_embeddings):
     index.upsert(vectors=vector_embeddings)
     return True
 
-def query_top2(vector_embedding):
+def query_top2(vector_embedding, metadata_filter: dict | None = None):
     if hasattr(vector_embedding, "tolist"):
         vector_embedding = vector_embedding.tolist()
 
     response = index.query(
         vector=vector_embedding,
         top_k=2,
-        include_metadata=True
+        include_metadata=True,
+        filter=metadata_filter,
     )
 
     return [

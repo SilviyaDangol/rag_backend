@@ -1,5 +1,6 @@
-from sqlmodel import SQLModel, Field
 from datetime import datetime
+
+from sqlmodel import SQLModel, Field
 
 
 class UserBookings(SQLModel, table=True):
