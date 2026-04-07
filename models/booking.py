@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field
-from datetime import datetime
+from datetime import datetime, time
 
 
 class UserBookings(SQLModel, table=True):
@@ -7,5 +7,5 @@ class UserBookings(SQLModel, table=True):
     Name: str = Field(nullable=False)
     Email: str = Field(nullable=False)
     Date: datetime = Field(nullable=False)
-    Time: datetime = Field(nullable=False)
+    Time: time = Field(nullable=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)

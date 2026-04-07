@@ -2,17 +2,19 @@ from fastapi import APIRouter
 import redis
 import json
 import uuid
+from datetime import datetime, timezone
 from google import genai
 from pinecone_sdk.add_vector import query_top2
 from utils.text_embeder import get_vector_embeddings
 from config import Config
+from utils.booking_utils import is_booking_intent, extract_booking_details, create_booking
 
 router: APIRouter = APIRouter(tags=["Part 2 REDIS"])
-r = redis.Redis(host="localhost", port=6379, db=0)
+r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
 client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
 
-def build_rag_prompt(message: str, context_chunks: list, history: list) -> str:
+def build_rag_prompt(message: str, context_chunks: list, history: list, now_iso: str) -> str:
     context_text = "\n\n".join(
         match["metadata"].get("text", "")
         for match in context_chunks
@@ -25,6 +27,9 @@ def build_rag_prompt(message: str, context_chunks: list, history: list) -> str:
     return f"""Answer the question using ONLY the context provided below.
                If the answer is not in the context, say you don't have enough information.
                 
+                Current datetime (UTC, ISO-8601):
+                {now_iso}
+
                 Context:
                 {context_text}
                 
@@ -45,6 +50,8 @@ def call_gemini(prompt: str) -> str:
 
 @router.post("/chat")
 def chat_with_redis(message: str, session_id: str | None = None):
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     if not session_id:
         session_id = str(uuid.uuid4())
 
@@ -54,10 +61,34 @@ def chat_with_redis(message: str, session_id: str | None = None):
 
     r.rpush(key, json.dumps({"role": "user", "content": message}))
 
+    # If the user intends to book a meeting/interview, route to booking flow here.
+    if is_booking_intent(message):
+        details = extract_booking_details(message, now_iso=now_iso)
+        if not details:
+            answer = "I can help book the meeting. Please share your name, email, date (YYYY-MM-DD), and time (HH:MM:SS)."
+        else:
+            missing = [k for k in ("name", "email", "date", "time") if details.get(k) is None]
+            if missing:
+                answer = f"Please provide the following missing details: {', '.join(missing)}"
+            else:
+                try:
+                    reply, booking_id = create_booking(details)
+                    answer = f"{reply} (booking_id: {booking_id})"
+                except ValueError as e:
+                    answer = str(e)
+
+        r.rpush(key, json.dumps({"role": "assistant", "content": answer}))
+        return {
+            "session_id": session_id,
+            "answer": answer,
+            "history": history,
+        }
+
     vector_embeddings = get_vector_embeddings(message)
     top_2 = query_top2(vector_embeddings)
 
-    prompt = build_rag_prompt(message, top_2, history)
+    # Inject request-time UTC datetime into prompt for grounding.
+    prompt = build_rag_prompt(message, top_2, history, now_iso=now_iso)
     answer = call_gemini(prompt)
 
     r.rpush(key, json.dumps({"role": "assistant", "content": answer}))
