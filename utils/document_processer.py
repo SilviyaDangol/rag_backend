@@ -15,15 +15,13 @@ class DocumentConverter:
         self.name = name
         self.extension = file.filename.split(".")[-1].lower()
         self.chunker = TextChunker(chunk_size, overlap)
-
-        # extract text + file-type-specific metadata
         self.text_content, self.file_meta = TextExtractor.extract(file)
 
     def get_metadata(self) -> dict:
         return {
             "document_name": self.file.filename,
             "user": self.name,
-            **self.file_meta   # author, title, page_count etc
+            **self.file_meta
         }
 
     def build_vectors(self) -> list[dict]:
