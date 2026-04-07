@@ -8,6 +8,7 @@ from pinecone_sdk.add_vector import query_top2
 from utils.text_embeder import get_vector_embeddings
 from config import Config
 from utils.booking_utils import is_booking_intent, extract_booking_details, create_booking
+from utils.redis_client import get_active_ingest_id
 
 router: APIRouter = APIRouter(tags=["Part 2 REDIS"])
 r = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
@@ -24,8 +25,11 @@ def build_rag_prompt(message: str, context_chunks: list, history: list, now_iso:
         f"{m['role'].capitalize()}: {m['content']}"
         for m in history
     ) if history else "No prior conversation."
-    return f"""Answer the question using ONLY the context provided below.
-               If the answer is not in the context, say you don't have enough information.
+    return f"""You are a strict RAG assistant.
+               Answer using ONLY the provided Context from the currently ingested document.
+               Do not use outside knowledge. Do not guess. Do not hallucinate.
+               If the answer is not clearly supported by Context, reply exactly:
+               "I don't have enough information in the currently ingested document."
                 
                 Current datetime (UTC, ISO-8601):
                 {now_iso}
@@ -61,15 +65,20 @@ def chat_with_redis(message: str, session_id: str | None = None):
 
     r.rpush(key, json.dumps({"role": "user", "content": message}))
 
+    # Include the latest user turn so booking intent/detail extraction can use full context.
+    booking_history = history + [{"role": "user", "content": message}]
+
     # If the user intends to book a meeting/interview, route to booking flow here.
-    if is_booking_intent(message):
-        details = extract_booking_details(message, now_iso=now_iso)
+    if is_booking_intent(message, booking_history):
+        details = extract_booking_details(message, booking_history, now_iso=now_iso)
         if not details:
             answer = "I can help book the meeting. Please share your name, email, date (YYYY-MM-DD), and time (HH:MM:SS)."
         else:
             missing = [k for k in ("name", "email", "date", "time") if details.get(k) is None]
             if missing:
-                answer = f"Please provide the following missing details: {', '.join(missing)}"
+                label_map = {"name": "name", "email": "email address", "date": "date (YYYY-MM-DD)", "time": "time (HH:MM:SS)"}
+                missing_labels = [label_map[m] for m in missing]
+                answer = f"To complete your booking, please share your {', '.join(missing_labels)}."
             else:
                 try:
                     reply, booking_id = create_booking(details)
@@ -85,7 +94,26 @@ def chat_with_redis(message: str, session_id: str | None = None):
         }
 
     vector_embeddings = get_vector_embeddings(message)
-    top_2 = query_top2(vector_embeddings)
+    active_ingest_id = get_active_ingest_id(None)
+    if not active_ingest_id:
+        answer = "No active ingested document found. Please ingest a document first."
+        r.rpush(key, json.dumps({"role": "assistant", "content": answer}))
+        return {
+            "session_id": session_id,
+            "answer": answer,
+            "history": history,
+        }
+
+    metadata_filter = {"ingest_id": active_ingest_id}
+    top_2 = query_top2(vector_embeddings, metadata_filter=metadata_filter)
+    if not top_2:
+        answer = "I don't have enough information in the currently ingested document."
+        r.rpush(key, json.dumps({"role": "assistant", "content": answer}))
+        return {
+            "session_id": session_id,
+            "answer": answer,
+            "history": history,
+        }
 
     # Inject request-time UTC datetime into prompt for grounding.
     prompt = build_rag_prompt(message, top_2, history, now_iso=now_iso)

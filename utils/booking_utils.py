@@ -11,16 +11,29 @@ from models.booking import UserBookings
 client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
 
-def is_booking_intent(message: str) -> bool:
-    prompt = f"""Does this message express an intent to book, schedule, or set up an interview?
+def is_booking_intent(message: str, history: list[dict]) -> bool:
+    history_text = "\n".join(
+        f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}"
+        for m in history
+    ) if history else "No prior conversation."
+    prompt = f"""Decide whether the user is trying to book, schedule, or set up an interview.
+                Use both the latest message and chat history for context.
                 Reply with only YES or NO.
-                Message: {message}
+
+                Chat History:
+                {history_text}
+
+                Latest Message: {message}
                 """
     response = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
     return response.text.strip().upper() == "YES"
 
 
-def extract_booking_details(message: str, now_iso: str) -> dict | None:
+def extract_booking_details(message: str, history: list[dict], now_iso: str) -> dict | None:
+    history_text = "\n".join(
+        f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}"
+        for m in history
+    ) if history else "No prior conversation."
     prompt = f"""Extract booking details from the message below.
                 Return ONLY a raw JSON object with keys: name, email, date, time.
                 date format must be: YYYY-MM-DD
@@ -31,8 +44,13 @@ def extract_booking_details(message: str, now_iso: str) -> dict | None:
                 Use this as the current reference date when resolving relative phrases
                 like "today", "tomorrow", "next week", or ambiguous dates.
                 Do not pick a past date unless the user explicitly asked for a past date.
+                If a detail (name, email, date, or time) is missing in the latest message,
+                search the provided Chat History to see if it was mentioned earlier.
 
-                Message: {message}"""
+                Chat History:
+                {history_text}
+
+                Latest Message: {message}"""
     response = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
     try:
         return json.loads(response.text.strip())

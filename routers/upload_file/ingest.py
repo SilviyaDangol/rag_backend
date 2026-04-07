@@ -13,7 +13,6 @@ router: APIRouter = APIRouter(tags=["Part 1 INGEST"])
 @router.post("/ingest")
 def ingest_document(
     file: UploadFile = File(...),
-    name: str = Form(...),
     chunking_strategy: Annotated[
         ChunkingStrategy,
         Form(
@@ -31,7 +30,7 @@ def ingest_document(
     try:
         process_pdf: DocumentConverter = DocumentConverter(
             file,
-            name=name,
+            name="default",
             chunking_strategy=chunking_strategy.value,
         )
     except ValueError:
@@ -39,7 +38,7 @@ def ingest_document(
 
     if not process_pdf.prep_pine_code_sdk():
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Server Error")
-    set_active_ingest(name, process_pdf.ingest_id)
+    set_active_ingest(None, process_pdf.ingest_id)
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
